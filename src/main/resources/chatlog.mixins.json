@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "com.vizor.chatlogger.mixin",
+  "compatibilityLevel": "JAVA_8",
+  "client": [
+    "ChatHudMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
