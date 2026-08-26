@@ -60,4 +60,4 @@ cd chatlogger
 
 ## Лицензия
 
-MIT
+VizorVerze
