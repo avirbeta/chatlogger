@@ -7,8 +7,11 @@ import net.minecraft.text.Text;
 
 import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -17,22 +20,16 @@ public final class ChatLog {
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final DateTimeFormatter FULL = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    private static BufferedWriter writer = null;
+    private static volatile BufferedWriter writer = null;
     private static String lastKey = null;
 
     private ChatLog() {
     }
 
-    public static void tick(MinecraftClient client) {
-        if (client.world == null) {
-            // в меню или загрузке — закрываем если был открыт
-            if (writer != null) {
-                close();
-            }
-            return;
-        }
-        String key = serverKey(client);
+    public static synchronized void tick(MinecraftClient client) {
+        String key = client.world == null ? null : serverKey(client);
         if (key == null) {
+            close();
             return;
         }
         if (!key.equals(lastKey)) {
@@ -43,16 +40,17 @@ public final class ChatLog {
     }
 
     public static void onChat(Text message) {
-        if (writer == null) {
-            return;
-        }
-        String time = LocalDateTime.now().format(TS);
         String text = message.getString();
-        synchronized (writer) {
+        if (text.isEmpty()) return;
+
+        synchronized (ChatLog.class) {
+            BufferedWriter w = writer;
+            if (w == null) return;
+            String time = LocalDateTime.now().format(TS);
             try {
-                writer.write("[" + time + "] " + text);
-                writer.newLine();
-                writer.flush();
+                w.write("[" + time + "] " + text);
+                w.newLine();
+                w.flush();
             } catch (IOException e) {
                 System.err.println("[chatlogger] Ошибка записи: " + e);
             }
@@ -60,7 +58,8 @@ public final class ChatLog {
     }
 
     private static void openWriter(MinecraftClient client) {
-        String ip, name;
+        String ip;
+        String name;
         ServerInfo si = client.getCurrentServerEntry();
         if (si != null) {
             ip = si.address;
@@ -71,40 +70,47 @@ public final class ChatLog {
         }
 
         File chatDir = new File(FabricLoader.getInstance().getGameDir().toFile(), "chat");
-        chatDir.mkdirs();
+        if (!chatDir.mkdirs() && !chatDir.isDirectory()) {
+            System.err.println("[chatlogger] Не удалось создать папку chat");
+            return;
+        }
 
         String safeName = name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
         if (safeName.isEmpty()) {
             safeName = "unknown";
         }
-        File file = new File(chatDir, safeName + ".txt");
+        Path file = chatDir.toPath().resolve(safeName + ".txt");
 
         try {
-            writer = new BufferedWriter(new FileWriter(file, true));
+            writer = Files.newBufferedWriter(
+                    file,
+                    StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND
+            );
             String now = LocalDateTime.now().format(FULL);
             writer.write("[" + now + "] === Сервер: " + name + " | IP: " + ip + " ===");
             writer.newLine();
             writer.flush();
         } catch (IOException e) {
+            writer = null;
             System.err.println("[chatlogger] Не удалось открыть файл: " + e);
         }
     }
 
-    private static void close() {
-        if (writer != null) {
-            synchronized (writer) {
-                try {
-                    String now = LocalDateTime.now().format(FULL);
-                    writer.write("[" + now + "] === Конец сессии ===");
-                    writer.newLine();
-                    writer.flush();
-                    writer.close();
-                } catch (IOException ignored) {
-                }
-            }
-            writer = null;
-        }
+    public static synchronized void close() {
+        BufferedWriter w = writer;
+        writer = null;
         lastKey = null;
+        if (w == null) return;
+        try {
+            String now = LocalDateTime.now().format(FULL);
+            w.write("[" + now + "] === Конец сессии ===");
+            w.newLine();
+            w.flush();
+            w.close();
+        } catch (IOException ignored) {
+        }
     }
 
     private static String serverKey(MinecraftClient client) {
